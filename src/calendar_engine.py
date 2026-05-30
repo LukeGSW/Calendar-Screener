@@ -1,29 +1,14 @@
 """
-calendar_engine.py — Motore quantitativo del Kriterion Quant CALENDAR Screener.
+calendar_engine.py - Motore quantitativo del Kriterion Quant CALENDAR Screener.
 
 Seleziona candidati per LONG CALENDAR (long 50DTE / short 30DTE) su mega-cap liquide,
-usando SOLO dati EOD OHLCV (nessun dato di opzioni / IV richiesto: lo screener gira anche
-su un tier EODHD ridotto).
+usando SOLO dati EOD OHLCV (nessun dato di opzioni / IV richiesto).
 
-────────────────────────────────────────────────────────────────────────────────
-RAZIONALE (validato a prezzi reali su OptionOmega, 554 trade su 5 mega-cap)
-────────────────────────────────────────────────────────────────────────────────
-Il long calendar è CORTO gamma a breve e LUNGO vega: guadagna dalla stabilità del prezzo
-e dal decadimento differenziale, SOFFRE i movimenti grossi. Il backtest reale ha mostrato:
+EDGE VALIDATO (OptionOmega, 554 trade su 5 mega-cap): l'Expansion Tier predice il calendar
+AL CONTRARIO dello straddle. INSUFFICIENT (rv_52w_max/rv_current < 1.5) reso +9.5%,
+HIGH (>= 3.0) reso -1.5%. Il calendar e' corto-gamma: vuole bassa espansione attesa.
 
-    Expansion Tier  (rv_52w_max / rv_current)        ROI medio reale
-      INSUFFICIENT  (< 1.5)  poca espansione attesa     +9.5%   <-- MIGLIORE
-      LOW           (1.5-2.0)                            +1.2%
-      MEDIUM        (2.0-3.0)                            +5.7%
-      HIGH          (>= 3.0) molta espansione attesa     -1.5%  <-- PEGGIORE
-
-È l'ESATTO OPPOSTO dello screener straddle: lì si cercava espansione (HIGH), qui la si evita.
-Meccanicamente coerente: bassa espansione attesa = niente movimento che fa esplodere il
-corto-gamma. Questo è l'UNICO edge validato; tutto il resto è igiene di rischio.
-
-⚠️  Lo screener NON è antifragile: seleziona income corto-gamma, fragile al disordine.
-⚠️  Earnings NON filtrati qui: verifica MANUALE obbligatoria prima dell'ingresso.
-────────────────────────────────────────────────────────────────────────────────
+ATTENZIONE: non antifragile (income corto-gamma). Earnings NON filtrati -> check manuale.
 """
 
 import logging
@@ -34,59 +19,67 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# ── Parametri (espliciti e documentati: niente drift codice/commenti) ─────────
-RV_WINDOW: int            = 14    # RV "lunga": regime di volatilità realizzata
-RV_SHORT_WINDOW: int      = 5     # RV "corta": solo diagnostica (non gate)
-PERCENTILE_LOOKBACK: int  = 252   # lookback percentile RV (~1 anno)
-RV_52W_WINDOW: int        = 252   # finestra per rv_52w_max (expansion ratio)
+# Parametri
+RV_WINDOW: int            = 14
+RV_SHORT_WINDOW: int      = 5
+PERCENTILE_LOOKBACK: int  = 252
+RV_52W_WINDOW: int        = 252
 ANNUALIZATION: float      = np.sqrt(252)
 
-# Gate di liquidità
-MIN_DOLLAR_VOLUME: float  = 50_000_000.0   # dollar volume 30d e 90d minimo
+MIN_DOLLAR_VOLUME: float  = 50_000_000.0
+EXPANSION_EXCLUDE_GTE: float = 3.0          # escludi tier HIGH
+VOL_EXTREME_PERCENTILE: float = 90.0        # esclude decile piu' volatile
+VOL_EXTREME_ABS_CAP: float    = 0.65        # ...o cap assoluto 65%
+TOP_N: int = 9
+STALE_MAX_DAYS: int = 5   # scarta ticker con ultimo EOD troppo vecchio (delisted/acquisiti)
 
-# Gate edge validato: escludi HIGH expansion (corto-gamma muore sull'espansione)
-EXPANSION_EXCLUDE_GTE: float = 3.0         # escludi expansion_ratio >= 3.0 (tier HIGH)
-
-# Gate vol estrema (problema TSLA): escludi il decile più volatile dell'universo
-VOL_EXTREME_PERCENTILE: float = 90.0       # esclude rv_current sopra questo percentile cross-section
-VOL_EXTREME_ABS_CAP: float    = 0.65       # ...oppure sopra questo cap assoluto (65% annualizzato)
-
-# Selezione finale
-TOP_N: int = 9                              # candidati emessi al giorno (shortlist 8-10)
-
-# Soglie tier (coerenti con il backtest)
 TIER_INSUFFICIENT = 1.5
 TIER_LOW          = 2.0
 TIER_HIGH         = 3.0
-
 MIN_VALID_RV_VALUES: int = PERCENTILE_LOOKBACK
 
+# Esclusione ETF/ETN (solo single-name). Rete di sicurezza tier-indipendente.
+ETF_BLOCKLIST = {
+    "SPY", "QQQ", "IWM", "DIA", "VOO", "VTI", "IVV", "MDY", "RSP",
+    "XLF", "XLE", "XLK", "XLV", "XLU", "XLP", "XLY", "XLI", "XLB", "XLRE", "XLC",
+    "SMH", "SOXX", "XBI", "IBB", "KRE", "KBE", "XOP", "OIH", "XME", "XRT", "XHB",
+    "ITB", "XTL", "IYR", "VNQ", "GLD", "SLV", "GDX", "GDXJ", "USO", "UNG", "DBC",
+    "DBA", "SLX", "TLT", "IEF", "SHY", "HYG", "LQD", "AGG", "BND", "TIP", "EMB",
+    "MUB", "BKLN", "EEM", "EFA", "FXI", "EWZ", "EWJ", "EWW", "EWT", "EWY", "INDA",
+    "RSX", "VEA", "VWO", "IEMG", "ASHR", "KWEB", "MCHI", "ARKK", "ARKG", "ARKW",
+    "ARKF", "ARKQ", "VXX", "UVXY", "SVXY", "VIXY", "SQQQ", "TQQQ", "SPXL", "SPXU",
+    "SOXL", "SOXS", "TNA", "TZA", "LABU", "LABD", "FAS", "FAZ", "UPRO", "SDOW",
+    "UDOW", "JETS", "TAN", "ICLN", "LIT", "BOTZ", "FINX", "HACK", "SKYY", "JNK",
+    "PFF", "SCHD", "DVY", "VIG", "VYM", "USMV", "MTUM", "QUAL", "SPLV",
+    "GBTC", "BITO", "ETHE", "IBIT", "FBTC", "BITX",
+}
 
-# ── Calcoli base ──────────────────────────────────────────────────────────────
+
+def is_etf(ticker: str) -> bool:
+    """True se il ticker e' nella blocklist ETF/ETN."""
+    base = ticker.replace(".US", "").replace("-", "").upper()
+    return base in ETF_BLOCKLIST
+
+
 def compute_log_returns(close: pd.Series) -> pd.Series:
-    """R_t = ln(P_t / P_{t-1}). Primo valore NaN."""
     return np.log(close / close.shift(1))
 
 
 def realized_volatility(returns: pd.Series, window: int) -> pd.Series:
-    """RV annualizzata = std(returns, window) * sqrt(252). In forma decimale (0.25 = 25%)."""
     return returns.rolling(window=window, min_periods=window).std() * ANNUALIZATION
 
 
 def rolling_percentile(series: pd.Series, lookback: int) -> pd.Series:
-    """Percentile [0-100] del valore odierno vs i precedenti `lookback` valori."""
-    def _pct(arr: np.ndarray) -> float:
+    def _pct(arr):
         cur, hist = arr[-1], arr[:-1]
         hist = hist[~np.isnan(hist)]
         if np.isnan(cur) or len(hist) == 0:
             return np.nan
         return float((hist < cur).sum() / len(hist) * 100.0)
-
     return series.rolling(window=lookback + 1, min_periods=lookback + 1).apply(_pct, raw=True)
 
 
 def classify_tier(ratio: float) -> str:
-    """Classifica l'Expansion Tier. Per il calendar: INSUFFICIENT/MEDIUM buoni, HIGH escluso."""
     if pd.isna(ratio):
         return "N/A"
     if ratio < TIER_INSUFFICIENT:
@@ -98,20 +91,11 @@ def classify_tier(ratio: float) -> str:
     return "HIGH"
 
 
-# ── Analisi per singolo ticker ────────────────────────────────────────────────
 def analyze_ticker(ticker: str, ohlcv: pd.DataFrame) -> Optional[dict]:
-    """
-    Calcola le metriche del singolo ticker per la selezione calendar.
-
-    Filtri per-ticker applicati: colonne minime, dollar volume 30/90 >= MIN, storia RV
-    sufficiente. L'esclusione vol-estrema è cross-section e avviene in run_analysis.
-
-    Returns: dict con metriche, oppure None se non passa i gate per-ticker.
-    """
+    """Metriche per un singolo ticker. None se non passa i gate liquidita'/storia."""
     if ohlcv is None or ohlcv.empty:
         return None
-    required = {"adjusted_close", "volume"}
-    if not required.issubset(ohlcv.columns):
+    if not {"adjusted_close", "volume"}.issubset(ohlcv.columns):
         return None
 
     df = ohlcv.sort_index().dropna(subset=["adjusted_close"])
@@ -122,17 +106,14 @@ def analyze_ticker(ticker: str, ohlcv: pd.DataFrame) -> Optional[dict]:
     volume = df["volume"].fillna(0)
     last_close = float(close.iloc[-1])
 
-    # ── Gate liquidità: dollar volume 30d e 90d ──────────────────────────────
     dv_30 = float(volume.rolling(30, min_periods=30).mean().iloc[-1]) * last_close
     dv_90 = float(volume.rolling(90, min_periods=90).mean().iloc[-1]) * last_close
     if np.isnan(dv_30) or np.isnan(dv_90) or dv_30 < MIN_DOLLAR_VOLUME or dv_90 < MIN_DOLLAR_VOLUME:
         return None
 
-    # ── Volatilità realizzata e percentile ───────────────────────────────────
     logret = compute_log_returns(close)
     rv_long = realized_volatility(logret, RV_WINDOW)
     rv_short = realized_volatility(logret, RV_SHORT_WINDOW)
-
     if int(rv_long.notna().sum()) < MIN_VALID_RV_VALUES:
         return None
 
@@ -142,13 +123,11 @@ def analyze_ticker(ticker: str, ohlcv: pd.DataFrame) -> Optional[dict]:
     if np.isnan(rv_current) or rv_current <= 0:
         return None
 
-    # ── Expansion ratio (l'edge): rv_52w_max / rv_current ────────────────────
     rv_52w = rv_long.iloc[-RV_52W_WINDOW:]
     rv_52w_max = float(rv_52w.max())
     expansion_ratio = rv_52w_max / rv_current if rv_current > 0 else np.nan
     tier = classify_tier(expansion_ratio)
 
-    # ── Diagnostica term-structure realizzata (NON usata come gate) ──────────
     rv_short_curr = float(rv_short.iloc[-1]) if pd.notna(rv_short.iloc[-1]) else np.nan
     term_structure = (rv_short_curr / rv_current) if (rv_current > 0 and not np.isnan(rv_short_curr)) else np.nan
 
@@ -156,7 +135,7 @@ def analyze_ticker(ticker: str, ohlcv: pd.DataFrame) -> Optional[dict]:
         "ticker": ticker.replace(".US", ""),
         "ticker_eodhd": ticker,
         "close": round(last_close, 2),
-        "rv_current": round(rv_current * 100, 2),       # %
+        "rv_current": round(rv_current * 100, 2),
         "rv_percentile": round(rv_pctl, 1) if not np.isnan(rv_pctl) else None,
         "rv_52w_max": round(rv_52w_max * 100, 2),
         "expansion_ratio": round(expansion_ratio, 2) if not np.isnan(expansion_ratio) else None,
@@ -165,47 +144,39 @@ def analyze_ticker(ticker: str, ohlcv: pd.DataFrame) -> Optional[dict]:
         "term_structure": round(term_structure, 3) if not np.isnan(term_structure) else None,
         "dollar_volume_30d": round(dv_30),
         "last_date": df.index[-1].date().isoformat(),
-        # flag interni (riempiti in run_analysis)
         "_rv_current_dec": rv_current,
         "_expansion_ratio": expansion_ratio if not np.isnan(expansion_ratio) else 999.0,
     }
 
 
-# ── Selezione e ranking sull'intero universo ──────────────────────────────────
 def run_analysis(ohlcv_data: Dict[str, pd.DataFrame], top_n: int = TOP_N) -> pd.DataFrame:
-    """
-    Pipeline completa sull'universo.
-
-    1) Analisi per ticker + gate liquidità/storia.
-    2) Gate edge: escludi HIGH expansion (ratio >= 3).
-    3) Gate vol estrema (cross-section): escludi il decile più volatile o sopra il cap assoluto.
-    4) Borda ranking: R1 = expansion_ratio ascendente (edge primario, validato),
-                      R2 = vicinanza alla MEDIANA di rv_current dell'universo qualificato (tiebreak oggettivo).
-    5) Top-N candidati.
-
-    Returns: DataFrame di TUTTI i qualificati, ordinato, con colonne di rank e flag is_candidate.
-    """
+    """Analisi batch + gate + Borda ranking + top-N. Ritorna tutti i qualificati ordinati."""
     rows = []
     for ticker, df in ohlcv_data.items():
         try:
             r = analyze_ticker(ticker, df)
             if r is not None:
                 rows.append(r)
-        except Exception as e:  # robustezza: un ticker rotto non ferma la pipeline
-            logger.debug(f"{ticker}: errore analisi — {e}")
+        except Exception as e:
+            logger.debug(f"{ticker}: errore analisi - {e}")
 
     if not rows:
-        logger.warning("Nessun ticker ha superato i gate liquidità/storia.")
+        logger.warning("Nessun ticker ha superato i gate liquidita'/storia.")
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
     n_input = len(df)
 
-    # ── Gate edge: escludi HIGH expansion (corto-gamma muore sull'espansione) ─
+    # Gate freschezza per-ticker: scarta delisted/acquisiti con ultimo EOD stantio (es. JNPR)
+    _ld = pd.to_datetime(df["last_date"], errors="coerce")
+    _maxld = _ld.max()
+    if pd.notna(_maxld):
+        df = df[(_maxld - _ld).dt.days <= STALE_MAX_DAYS].copy()
+    n_after_fresh = len(df)
+
     df = df[df["_expansion_ratio"] < EXPANSION_EXCLUDE_GTE].copy()
     n_after_tier = len(df)
 
-    # ── Gate vol estrema (cross-section): decile più volatile OPPURE cap assoluto ─
     if len(df):
         vol_cut = np.percentile(df["_rv_current_dec"], VOL_EXTREME_PERCENTILE)
         cut = min(vol_cut, VOL_EXTREME_ABS_CAP)
@@ -216,26 +187,14 @@ def run_analysis(ohlcv_data: Dict[str, pd.DataFrame], top_n: int = TOP_N) -> pd.
         logger.warning("Nessun candidato dopo i gate edge/vol.")
         return df
 
-    # ── Borda ranking ────────────────────────────────────────────────────────
-    # R1: expansion_ratio ascendente — più basso = meglio (edge primario validato)
     df["rank_expansion"] = df["_expansion_ratio"].rank(method="min", ascending=True)
-    # R2: vicinanza alla mediana cross-section di rv_current (banda vol oggettiva, tiebreak)
     median_rv = df["_rv_current_dec"].median()
     df["_vol_distance"] = (df["_rv_current_dec"] - median_rv).abs()
     df["rank_vol_band"] = df["_vol_distance"].rank(method="min", ascending=True)
-
-    # Edge primario pesato di più del tiebreak
     df["borda_score"] = df["rank_expansion"] + 0.5 * df["rank_vol_band"]
     df = df.sort_values(["borda_score", "rank_expansion"], ascending=[True, True]).reset_index(drop=True)
     df["borda_rank"] = np.arange(1, len(df) + 1)
-
-    # ── Top-N candidati ──────────────────────────────────────────────────────
     df["is_candidate"] = df["borda_rank"] <= top_n
 
-    logger.info(
-        f"Universo: {n_input} qualificati → {n_after_tier} dopo no-HIGH → "
-        f"{n_after_vol} dopo no-vol-estrema → top {top_n} candidati."
-    )
-
-    # pulizia colonne interne
+    logger.info(f"Universo: {n_input} qual -> {n_after_fresh} freschi -> {n_after_tier} no-HIGH -> {n_after_vol} no-vol-estrema -> top {top_n}.")
     return df.drop(columns=["_rv_current_dec", "_expansion_ratio", "_vol_distance"], errors="ignore")
