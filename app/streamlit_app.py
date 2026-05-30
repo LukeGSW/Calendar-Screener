@@ -55,6 +55,9 @@ with st.sidebar:
             st.warning("⚠️ Dati potenzialmente stantii (festività USA?)")
     st.divider()
     show_universe = st.checkbox("Mostra intero universo qualificato", value=False)
+    if st.button("🔄 Forza aggiornamento dati"):
+        st.cache_data.clear()
+        st.rerun()
     st.caption("📡 Dati: EODHD EOD · aggiornati dalla GitHub Action notturna")
 
 # ── Header ────────────────────────────────────────────────────────────────────
@@ -72,6 +75,28 @@ st.error("⚠️ **CONTROLLO EARNINGS MANUALE OBBLIGATORIO** — lo screener NON
 st.info("ℹ️ Questa è una strategia **income corto-gamma**: vince spesso ma soffre i movimenti estremi. "
         "**Non è una copertura antifragile** — correla con un book azionario long. Dimensiona di conseguenza.")
 
+# ── Riquadro: dettagli della strategia codificata ─────────────────────────────
+with st.container(border=True):
+    st.markdown("#### 🗓️ Strategia codificata — Long Calendar Mega Cap")
+    a, b, c, d = st.columns(4)
+    a.markdown("**Gamba LUNGA**  \nBuy **50 DTE**  \nDelta circa **0.50** (ATM)")
+    b.markdown("**Gamba CORTA**  \nSell **30 DTE**  \nDelta circa **0.50** (ATM)")
+    c.markdown("**Uscita**  \nTime exit  \n**14 barre daily**")
+    d.markdown("**Profilo**  \nDouble calendar (C+P)  \nCorto gamma · lungo vega")
+    st.caption(
+        "**Ingresso**: strike ATM via delta 0.50 su entrambe le gambe, stesso strike (double calendar call+put). "
+        "**Gestione**: hold a tempo (14 barre); profit target +15-25% opzionale, alza il win rate a EV invariato. "
+        "**Selezione**: Expansion Tier basso (escluso HIGH >=3) · vol non estrema (anti-TSLA) · liquidita >= 50M$ · "
+        "ranking Borda, top-N. **Earnings**: esclusione manuale prima dell'ingresso."
+    )
+
+# ── Banner: stai vedendo dati DEMO? ───────────────────────────────────────────
+_last = str(meta.get("last_eod_date", ""))
+if ("demo" in _last.lower()) or ("placeholder" in _last.lower()):
+    st.warning("🟡 **Stai vedendo i dati DEMO** (placeholder sintetici). La prima esecuzione reale della "
+               "GitHub Action li sovrascrive. Se l'hai gia lanciata e vedi ancora questo avviso, controlla i "
+               "permessi di scrittura della Action e svuota la cache (pulsante di aggiornamento nella sidebar).")
+
 if df.empty:
     st.warning("Nessun risultato disponibile. Attendi la prima esecuzione della GitHub Action "
                "(o lancia `python -m src.pipeline` in locale con EODHD_API_KEY).")
@@ -88,13 +113,13 @@ st.divider()
 
 # ── Tabella candidati ─────────────────────────────────────────────────────────
 st.subheader("📋 Candidati del giorno")
-st.markdown("Ordinati per **Borda rank** (1 = priorità). `expansion_ratio` basso = edge migliore. "
-            "Colonna ⚠️ = ricorda il check earnings manuale.")
+st.markdown("Ordinati per **Borda rank** (1 = priorita). `expansion_ratio` basso = edge migliore. "
+            "Colonna earnings = ricorda il check manuale.")
 
 table = cand.copy()
-table["⚠️ earnings"] = "verifica manuale"
+table["earnings"] = "verifica manuale"
 view_cols = ["borda_rank", "ticker", "close", "rv_current", "rv_percentile",
-             "expansion_ratio", "tier", "dollar_volume_30d", "last_date", "⚠️ earnings"]
+             "expansion_ratio", "tier", "dollar_volume_30d", "last_date", "earnings"]
 view_cols = [c for c in view_cols if c in table.columns]
 st.dataframe(
     table[view_cols].rename(columns={
@@ -106,8 +131,8 @@ st.dataframe(
 
 # ── Dot plot principale ───────────────────────────────────────────────────────
 st.subheader("🎯 Mappa di selezione")
-st.markdown("Ogni punto è un ticker qualificato. **Verdi = candidati.** Più a sinistra (bassa espansione attesa) "
-            "= edge migliore per il calendar; la fascia ombreggiata è la banda di RV centrale dell'universo.")
+st.markdown("Ogni punto e un ticker qualificato. **Verdi = candidati.** Piu a sinistra (bassa espansione attesa) "
+            "= edge migliore per il calendar; la fascia ombreggiata e la banda di RV centrale dell'universo.")
 st.plotly_chart(dot_plot_expansion_vs_rv(df), use_container_width=True)
 
 col_a, col_b = st.columns(2)
@@ -128,26 +153,26 @@ if show_universe:
 # ── Metodologia ───────────────────────────────────────────────────────────────
 with st.expander("ℹ️ Metodologia e avvertenze (leggere)"):
     st.markdown("""
-**Strategia.** Long calendar: compra opzioni ~50 DTE, vende ~30 DTE (stesso strike, double calendar
-call+put), hold ~14 giorni di trading. Profilo: corto gamma a breve, lungo vega.
+**Strategia.** Long calendar: compra opzioni ~50 DTE, vende ~30 DTE (stesso strike ATM, delta 0.50,
+double calendar call+put), hold ~14 barre daily (time exit). Profilo: corto gamma a breve, lungo vega.
 
 **Edge validato.** Su 554 trade reali (OptionOmega, 5 mega-cap) l'Expansion Tier risulta predittivo
 **al contrario** rispetto allo straddle: tier INSUFFICIENT (`rv_52w_max/rv_current` < 1.5) reso +9.5%,
-tier HIGH (≥3) reso −1.5%. Meccanica coerente: bassa espansione attesa = niente movimento che fa
+tier HIGH (>=3) reso -1.5%. Meccanica coerente: bassa espansione attesa = niente movimento che fa
 esplodere il corto-gamma.
 
 **Filtri.**
-- *Gate liquidità*: dollar volume 30/90gg ≥ $50M.
-- *Gate edge*: escluso tier HIGH (expansion ratio ≥ 3).
-- *Gate vol estrema*: escluso il decile più volatile dell'universo (o RV > 65%) — il "problema TSLA".
+- *Gate liquidita*: dollar volume 30/90gg >= 50M$.
+- *Gate edge*: escluso tier HIGH (expansion ratio >= 3).
+- *Gate vol estrema*: escluso il decile piu volatile dell'universo (o RV > 65%), il "problema TSLA".
 - *Ranking*: Borda = expansion ratio ascendente (primario) + vicinanza alla mediana RV (tiebreak oggettivo).
 - *Selezione*: top-N candidati.
 
-**Limiti (onestà intellettuale).**
+**Limiti (onesta intellettuale).**
 - Solo RV/prezzo: **nessun dato di IV**. L'IV reale va verificata al broker prima dell'ingresso.
 - **Earnings non filtrati**: check manuale obbligatorio.
 - **Non antifragile**: income corto-gamma, fragile ai movimenti estremi, correlato col book long.
-- Edge validato su 5 nomi: conferma su universo più ampio quando possibile.
+- Edge validato su 5 nomi: conferma su universo piu ampio quando possibile.
 """)
 
 st.caption(f"Dashboard generata {datetime.now().strftime('%d/%m/%Y %H:%M')} · dati EODHD via GitHub Action.")
