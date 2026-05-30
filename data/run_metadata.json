@@ -1,11 +1,11 @@
 {
-  "run_utc": "2026-05-30T19:54:49+00:00",
+  "run_utc": "2026-05-30T20:40:50+00:00",
   "last_eod_date": "2026-05-29",
   "expected_session": "2026-05-29",
   "data_fresh": true,
   "universe_size": 291,
   "fetched_ok": 286,
-  "qualified": 226,
+  "qualified": 223,
   "n_candidates": 9,
   "candidates": [
     "COST",
