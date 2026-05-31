@@ -15,6 +15,7 @@ import streamlit as st
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.charts import dot_plot_expansion_vs_rv, bar_candidates_score, history_line  # noqa: E402
+from src.calendar_engine import is_etf  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
@@ -39,6 +40,10 @@ def load_history():
 
 
 df, meta = load_results()
+# Rete di sicurezza: rimuovi eventuali ETF rimasti in un CSV generato da una versione precedente
+if not df.empty:
+    _tk_col = "ticker_eodhd" if "ticker_eodhd" in df.columns else "ticker"
+    df = df[~df[_tk_col].astype(str).apply(is_etf)].copy()
 
 # Sidebar
 with st.sidebar:
