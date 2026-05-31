@@ -153,6 +153,8 @@ def run_analysis(ohlcv_data: Dict[str, pd.DataFrame], top_n: int = TOP_N) -> pd.
     """Analisi batch + gate + Borda ranking + top-N. Ritorna tutti i qualificati ordinati."""
     rows = []
     for ticker, df in ohlcv_data.items():
+        if is_etf(ticker):          # safety net: niente ETF tra i candidati
+            continue
         try:
             r = analyze_ticker(ticker, df)
             if r is not None:
