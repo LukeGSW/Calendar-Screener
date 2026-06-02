@@ -1,34 +1,34 @@
 {
-  "run_utc": "2026-06-01T11:16:54+00:00",
-  "last_eod_date": "2026-05-29",
-  "expected_session": "2026-05-29",
+  "run_utc": "2026-06-02T10:13:02+00:00",
+  "last_eod_date": "2026-06-01",
+  "expected_session": "2026-06-01",
   "data_fresh": true,
   "universe_size": 267,
   "fetched_ok": 262,
-  "qualified": 202,
+  "qualified": 199,
   "n_candidates": 9,
   "candidates": [
     "COST",
     "TJX",
-    "CME",
     "NSC",
     "TSN",
     "UNP",
     "CVX",
+    "XOM",
     "EOG",
-    "XOM"
+    "OKE"
   ],
   "n_new": 9,
   "new_candidates": [
     "COST",
     "TJX",
-    "CME",
     "NSC",
     "TSN",
     "UNP",
     "CVX",
+    "XOM",
     "EOG",
-    "XOM"
+    "OKE"
   ],
   "top_n": 9
 }
