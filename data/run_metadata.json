@@ -1,34 +1,34 @@
 {
-  "run_utc": "2026-07-01T09:35:36+00:00",
-  "last_eod_date": "2026-06-30",
-  "expected_session": "2026-06-30",
+  "run_utc": "2026-07-02T08:47:33+00:00",
+  "last_eod_date": "2026-07-01",
+  "expected_session": "2026-07-01",
   "data_fresh": true,
   "universe_size": 267,
   "fetched_ok": 262,
-  "qualified": 206,
+  "qualified": 204,
   "n_candidates": 9,
   "candidates": [
     "GD",
+    "PGR",
     "AMT",
     "HD",
     "DLR",
-    "JNJ",
     "AAPL",
-    "PGR",
+    "JNJ",
     "LOW",
-    "CME"
+    "T"
   ],
   "n_new": 9,
   "new_candidates": [
     "GD",
+    "PGR",
     "AMT",
     "HD",
     "DLR",
-    "JNJ",
     "AAPL",
-    "PGR",
+    "JNJ",
     "LOW",
-    "CME"
+    "T"
   ],
   "top_n": 9
 }
